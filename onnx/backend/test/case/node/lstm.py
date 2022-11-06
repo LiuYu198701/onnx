@@ -29,12 +29,9 @@ class LSTM_Helper:
             assert i in params, f"Missing Required Input: {i}"
 
         self.num_directions = params[W].shape[0]
+        self.direction = params['direction']
 
-        if self.num_directions == 1:
-            for k in params.keys():
-                if k != X:
-                    params[k] = np.squeeze(params[k], axis=0)
-
+        if self.direction <= 2:
             hidden_size = params[R].shape[-1]
             batch_size = params[X].shape[1]
 
@@ -44,22 +41,24 @@ class LSTM_Helper:
             b = (
                 params[B]
                 if B in params
-                else np.zeros(2 * number_of_gates * hidden_size, dtype=np.float32)
+                else np.zeros((self.num_directions, 2 * number_of_gates * hidden_size),
+                              dtype=np.float32)
             )
             p = (
                 params[P]
                 if P in params
-                else np.zeros(number_of_peepholes * hidden_size, dtype=np.float32)
+                else np.zeros((self.num_directions, number_of_peepholes * hidden_size),
+                              dtype=np.float32)
             )
             h_0 = (
                 params[H_0]
                 if H_0 in params
-                else np.zeros((batch_size, hidden_size), dtype=np.float32)
+                else np.zeros((self.num_directions, batch_size, hidden_size), dtype=np.float32)
             )
             c_0 = (
                 params[C_0]
                 if C_0 in params
-                else np.zeros((batch_size, hidden_size), dtype=np.float32)
+                else np.zeros((self.num_directions, batch_size, hidden_size), dtype=np.float32)
             )
 
             self.X = x
@@ -89,31 +88,41 @@ class LSTM_Helper:
         batch_size = self.X.shape[1]
 
         Y = np.empty([seq_length, self.num_directions, batch_size, hidden_size])
-        h_list = []
 
-        [p_i, p_o, p_f] = np.split(self.P, 3)
-        H_t = self.H_0
-        C_t = self.C_0
-        for x in np.split(self.X, self.X.shape[0], axis=0):
-            gates = (
-                np.dot(x, np.transpose(self.W))
-                + np.dot(H_t, np.transpose(self.R))
-                + np.add(*np.split(self.B, 2))
-            )
-            i, o, f, c = np.split(gates, 4, -1)
-            i = self.f(i + p_i * C_t)
-            f = self.f(f + p_f * C_t)
-            c = self.g(c)
-            C = f * C_t + i * c
-            o = self.f(o + p_o * C)
-            H = o * self.h(C)
-            h_list.append(H)
-            H_t = H
-            C_t = C
+        if self.direction < 2:
+            directions = [self.direction]
+        else:
+            directions = [0, 1]
 
-        concatenated = np.concatenate(h_list)
-        if self.num_directions == 1:
-            Y[:, 0, :, :] = concatenated
+        for d, direction in enumerate(directions):
+            [p_i, p_o, p_f] = np.split(self.P[d], 3)
+            H_t = self.H_0[d]
+            C_t = self.C_0[d]
+            h_list = []
+            b = np.add(*np.split(self.B[d], 2))
+            W = np.transpose(self.W[d])
+            R = np.transpose(self.R[d])
+
+            split_X = np.split(self.X, self.X.shape[0], axis=0)
+            if direction == 1:
+                split_X.reverse()
+
+            for x in split_X:
+                gates = np.dot(x, W) + np.dot(H_t, R) + b
+                i, o, f, c = np.split(gates, 4, -1)
+                i = self.f(i + p_i * C_t)
+                f = self.f(f + p_f * C_t)
+                c = self.g(c)
+                C = f * C_t + i * c
+                o = self.f(o + p_o * C)
+                H = o * self.h(C)
+                h_list.append(H)
+                H_t = H
+                C_t = C
+            if direction == 1:
+                h_list.reverse()
+
+            Y[:, d, :, :] = np.concatenate(h_list)
 
         if self.LAYOUT == 0:
             Y_h = Y[-1]
